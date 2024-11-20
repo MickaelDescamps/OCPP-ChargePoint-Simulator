@@ -6,6 +6,12 @@ import * as ocpp from './ocpp_constants.js'
 // Utility functions
 //
 //
+function meterStartConverter(key, value) {
+    return key === "meterStart" ? +value : value;
+}
+
+
+
 function formatDate(date) {
     var day = String(date.getDate()),
         monthIndex = String(date.getMonth() + 1),
@@ -239,19 +245,32 @@ export default class ChargePoint {
             }
         }
         else if (la == "Authorize") {
-            if (payload.idTagInfo.status == 'Invalid') {
-                this.logMsg('Authorization failed');
-            }
-            else {
+            if (payload.idTagInfo.status == 'Accepted') {
                 this.logMsg('Authorization OK');
                 this.setStatus(ocpp.CP_AUTHORIZED);
-            } 
+            }
+            else if(payload.idTagInfo.status == 'Blocked') {
+                this.logMsg('Authorization refused: Tag blocked');
+                this.setStatus(ocpp.CP_CONNECTED);
+            }
+            else {
+                this.logMsg('Authorization refused: Error');
+                this.setStatus(ocpp.CP_ERROR);
+            }
         }
         else if (la == "startTransaction") {
-            var transactionId = payload.transactionId;
-            setSessionKey('TransactionId',transactionId);
-            this.setStatus(ocpp.CP_INTRANSACTION,'TransactionId: '+transactionId)
-            this.logMsg("Transaction id is "+transactionId);
+            if (payload.idTagInfo.status == 'Accepted') {
+                this.logMsg('Transaction started');
+                var transactionId = 0 + parseInt(payload.transactionId);
+                setSessionKey('TransactionId',transactionId);
+                this.setStatus(ocpp.CP_INTRANSACTION,'TransactionId: '+transactionId)
+                this.logMsg("Transaction id is "+transactionId);
+            }
+            else {
+                this.logMsg('Transaction refused');
+                this.setStatus(ocpp.CP_CONNECTED);
+            }
+            
         }
     }
 
@@ -285,7 +304,7 @@ export default class ChargePoint {
     startTransaction(tagId,connectorId=1,reservationId=0){
         this.setLastAction("startTransaction");
         this.setStatus(ocpp.CP_INTRANSACTION);
-        var mv = this.meterValue();
+        var mv = 0+parseInt(this.meterValue());
         var id=generateId();
         var strtT = JSON.stringify([2,id,"StartTransaction", {
             "connectorId": connectorId,
@@ -294,6 +313,7 @@ export default class ChargePoint {
             "meterStart": mv,
             "reservationId": reservationId
         }]);
+        this.logMsg(strtT);
         this.logMsg("Starting Transaction for tag "+tagId+" (connector:"+connectorId+", meter value="+mv+")");
         this.wsSendData(strtT);
         this.setConnectorStatus(connectorId,ocpp.CONN_CHARGING);
@@ -316,11 +336,12 @@ export default class ChargePoint {
     stopTransactionWithId(transactionId,tagId="DEADBEEF"){
         this.setLastAction("stopTransaction");
         this.setStatus(ocpp.CP_AUTHORIZED);
-        var mv=this.meterValue();
+        var mv=0+parseInt(this.meterValue());
         this.logMsg("Stopping Transaction with id "+transactionId+" (meterValue="+mv+")");
         var id=generateId();
-        var stopParams = {           
-            "transactionId": transactionId,
+        var formattedTransactionId = 0 + parseInt(transactionId);
+        var stopParams = {
+            "transactionId": formattedTransactionId,
             "timestamp": formatDate(new Date()),
             "meterStop": mv};
         if (!isEmpty(tagId)) {
@@ -536,7 +557,7 @@ export default class ChargePoint {
     // Return the meter value
     //
     meterValue() {
-        return (getSessionKey(ocpp.KEY_METER_VALUE,"0"));
+        return (parseInt(getSessionKey(ocpp.KEY_METER_VALUE,"0")));
     }
     
     //
@@ -560,7 +581,8 @@ export default class ChargePoint {
         var meter=getSessionKey(ocpp.KEY_METER_VALUE);
         var id=generateId();
         var ssid = getSessionKey('TransactionId');
-        mvreq = JSON.stringify([2, id, "MeterValues", {"connectorId": c, "transactionId": ssid, "meterValue": [{"timestamp": formatDate(new Date()), "sampledValue": [{"value": meter}]}]}]);
+        var transactionId = 0 + parseInt(ssid);
+        mvreq = JSON.stringify([2, id, "MeterValues", {"connectorId": c, "transactionId": transactionId, "meterValue": [{"timestamp": formatDate(new Date()), "sampledValue": [{"value": meter}]}]}]);
         this.logMsg("Send Meter Values: "+meter+" (connector " +c+")");
         this.wsSendData(mvreq);
     }
